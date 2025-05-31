@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="zh"> <!-- Default language set to Chinese -->
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title id="pageTitle">音频转SRT字幕 (客户端)</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
+        .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        label { display: block; margin-bottom: 8px; font-weight: bold; }
+        input[type="text"], input[type="file"], input[type="number"] {
+            width: calc(100% - 22px);
+            padding: 10px;
+            margin-bottom: 20px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-right: 10px;
+        }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        #status { margin-top: 20px; padding: 10px; background-color: #e9ecef; border-radius: 4px; white-space: pre-wrap; max-height: 300px; overflow-y: auto;}
+        .warning { color: red; font-weight: bold; margin-bottom: 15px; }
+        .config-section, details { margin-bottom: 20px; padding: 15px; border: 1px solid #eee; border-radius: 4px; }
+        h3, summary { margin-top: 0; font-weight: bold; cursor: pointer; }
+        summary { display: list-item; } /* Better styling for details summary */
+        .lang-toggle-container { margin-bottom: 20px; text-align: right; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="lang-toggle-container">
+            <button id="langToggleBtn">Switch to English</button>
+        </div>
+
+        <h1 id="mainHeading">音频转SRT字幕 (客户端演示)</h1>
+        <p class="warning" id="securityWarning">
+            安全警告：在浏览器 (localStorage) 中存储 API 密钥是不安全的，仅适用于您是唯一用户的个人本地工具。
+            请勿在可公开访问的 Web 应用程序中使用此方法。
+        </p>
+
+        <div class="config-section">
+            <h3 id="configHeading">配置</h3>
+            <label for="apiKey" id="apiKeyLabel">硅基流动 API 密钥:</label>
+            <input type="text" id="apiKey" placeholder="在此输入您的 API 密钥">
+
+            <label for="modelName" id="modelNameLabel">模型名称 (例如 FunAudioLLM/SenseVoiceSmall):</label>
+            <input type="text" id="modelName" value="FunAudioLLM/SenseVoiceSmall">
+        </div>
+
+        <details>
+            <summary id="vadParamsToggle">VAD 参数 (简化)</summary>
+            <div class="config-section" style="border: none; padding-top: 15px; padding-left:0; padding-right:0; padding-bottom:0;">
+                <label for="minSilenceLen" id="minSilenceLenLabel">VAD 最小静音长度 (ms):</label>
+                <input type="number" id="minSilenceLen" value="500">
+                <label for="silenceThresh" id="silenceThreshLabel">静音阈值 (RMS, 例如安静环境 0.01, 极静环境 0.001):</label>
+                <input type="number" id="silenceThresh" value="0.01" step="0.001">
+                <label for="minChunkLength" id="minChunkLengthLabel">最小语音片段长度 (ms):</label>
+                <input type="number" id="minChunkLength" value="200">
+                <label for="maxChunkLength" id="maxChunkLengthLabel">最大语音片段长度 (ms):</label>
+                <input type="number" id="maxChunkLength" value="28000"> <!-- API might have limits like 30s -->
+            </div>
+        </details>
+
+        <label for="audioFile" id="audioFileLabel">选择一个音频文件 (WAV, MP3, AAC, M4A, OGG, FLAC 等):</label>
+        <input type="file" id="audioFile" accept="audio/*,audio/wav,audio/mpeg,audio/aac,audio/mp4,audio/ogg,audio/flac,audio/x-m4a">
+
+        <button id="processButton">处理音频并生成 SRT</button>
+
+        <div id="status">状态消息将显示在此处...</div>
+    </div>
+
+    <script>
+        const apiKeyInput = document.getElementById('apiKey');
+        const modelNameInput = document.getElementById('modelName');
+        const audioFileInput = document.getElementById('audioFile');
+        const processButton = document.getElementById('processButton');
+        const statusDiv = document.getElementById('status');
+        const langToggleBtn = document.getElementById('langToggleBtn');
+
+        const minSilenceLenInput = document.getElementById('minSilenceLen');
+        const silenceThreshInput = document.getElementById('silenceThresh');
+        const minChunkLengthInput = document.getElementById('minChunkLength');
+        const maxChunkLengthInput = document.getElementById('maxChunkLength');
+
+        const SILICONFLOW_API_URL = "https://api.siliconflow.cn/v1/audio/transcriptions";
+
+        // --- Localization ---
+        const translations = {
+            zh: {
+                pageTitle: "音频转SRT字幕 (客户端)",
+                mainHeading: "音频转SRT字幕 (客户端演示)",
+                securityWarning: "安全警告：在浏览器 (localStorage) 中存储 API 密钥是不安全的，仅适用于您是唯一用户的个人本地工具。请勿在可公开访问的 Web 应用程序中使用此方法。",
+                configHeading: "配置",
+                apiKeyLabel: "硅基流动 API 密钥:",
+                apiKeyPlaceholder: "在此输入您的 API 密钥",
+                modelNameLabel: "模型名称 (例如 FunAudioLLM/SenseVoiceSmall):",
+                vadParamsToggle: "VAD 参数 (简化)",
+                minSilenceLenLabel: "VAD 最小静音长度 (ms):",
+                silenceThreshLabel: "静音阈值 (RMS, 例如安静环境 0.01, 极静环境 0.001):",
+                minChunkLengthLabel: "最小语音片段长度 (ms):",
+                maxChunkLengthLabel: "最大语音片段长度 (ms):",
+                audioFileLabel: "选择一个音频文件 (WAV, MP3, AAC, M4A, OGG, FLAC 等):",
+                processButton: "处理音频并生成 SRT",
+                statusPlaceholder: "状态消息将显示在此处...",
+                switchToEnglish: "Switch to English",
+                switchToChinese: "切换到中文",
+                apiKeySaved: "API 密钥已保存到 localStorage (仅限此浏览器)。",
+                errorApiKeyMissing: "错误：API 密钥缺失。",
+                alertApiKeyMissing: "请输入您的 API 密钥。",
+                errorNoAudioFile: "错误：未选择音频文件。",
+                alertNoAudioFile: "请选择一个音频文件。",
+                errorModelNameMissing: "错误：模型名称缺失。",
+                alertModelNameMissing: "请输入模型名称。",
+                processingStarted: "处理开始...",
+                audioDecoded: "音频已解码。正在执行 VAD...",
+                vadFoundSegments: (count) => `VAD 检测到 ${count} 个语音片段。准备转录片段...`,
+                noSpeechDetected: "VAD 未检测到语音。",
+                processingChunk: (current, total) => `正在处理片段 ${current}/${total}...`,
+                chunkTranscribed: (index, text) => `片段 ${index} 转录完成: ${text.substring(0,30)}...`,
+                errorTranscribingChunk: (index, message, retries) => `转录片段 ${index} 失败: ${message}。剩余重试次数: ${retries}`,
+                allChunksTranscribed: "所有片段已转录。正在生成 SRT...",
+                srtGenerated: "SRT 文件已生成并开始下载。",
+                downloadSRTFileName: "输出"
+            },
+            en: {
+                pageTitle: "Audio to SRT (Client-Side)",
+                mainHeading: "Audio to SRT Transcription (Client-Side Demo)",
+                securityWarning: "SECURITY WARNING: Storing API keys in the browser (localStorage) is insecure and only suitable for personal, local-only tools. Do NOT use this method for public applications.",
+                configHeading: "Configuration",
+                apiKeyLabel: "SiliconFlow API Key:",
+                apiKeyPlaceholder: "Enter your API Key here",
+                modelNameLabel: "Model Name (e.g., FunAudioLLM/SenseVoiceSmall):",
+                vadParamsToggle: "VAD Parameters (Simplified)",
+                minSilenceLenLabel: "Min Silence Length (ms) for VAD:",
+                silenceThreshLabel: "Silence Threshold (RMS, e.g., 0.01 for quiet, 0.001 for very quiet):",
+                minChunkLengthLabel: "Min Speech Chunk Length (ms):",
+                maxChunkLengthLabel: "Max Speech Chunk Length (ms):",
+                audioFileLabel: "Choose an audio file (WAV, MP3, AAC, M4A, OGG, FLAC, etc.):",
+                processButton: "Process Audio and Generate SRT",
+                statusPlaceholder: "Status messages will appear here...",
+                switchToEnglish: "Switch to English",
+                switchToChinese: "切换到中文",
+                apiKeySaved: "API Key saved to localStorage (for this browser only).",
+                errorApiKeyMissing: "Error: API Key is missing.",
+                alertApiKeyMissing: "Please enter your API Key.",
+                errorNoAudioFile: "Error: No audio file selected.",
+                alertNoAudioFile: "Please select an audio file.",
+                errorModelNameMissing: "Error: Model name is missing.",
+                alertModelNameMissing: "Please enter a model name.",
+                processingStarted: "Processing started...",
+                audioDecoded: "Audio decoded. Performing VAD...",
+                vadFoundSegments: (count) => `VAD found ${count} speech segments. Preparing chunks for transcription...`,
+                noSpeechDetected: "No speech detected by VAD.",
+                processingChunk: (current, total) => `Processing chunk ${current}/${total}...`,
+                chunkTranscribed: (index, text) => `Chunk ${index} transcribed: ${text.substring(0,30)}...`,
+                errorTranscribingChunk: (index, message, retries) => `Error transcribing chunk ${index}: ${message}. Retries left: ${retries}`,
+                allChunksTranscribed: "All chunks transcribed. Generating SRT...",
+                srtGenerated: "SRT file generated and download initiated.",
+                downloadSRTFileName: "output"
+            }
+        };
+
+        let currentLang = localStorage.getItem('transcriptionToolLang') || 'zh';
+
+        function applyTranslations(lang) {
+            const t = translations[lang];
+            document.documentElement.lang = lang;
+            document.getElementById('pageTitle').textContent = t.pageTitle;
+            document.getElementById('mainHeading').textContent = t.mainHeading;
+            document.getElementById('securityWarning').textContent = t.securityWarning;
+            document.getElementById('configHeading').textContent = t.configHeading;
+            document.getElementById('apiKeyLabel').textContent = t.apiKeyLabel;
+            document.getElementById('apiKey').placeholder = t.apiKeyPlaceholder;
+            document.getElementById('modelNameLabel').textContent = t.modelNameLabel;
+            document.getElementById('vadParamsToggle').textContent = t.vadParamsToggle;
+            document.getElementById('minSilenceLenLabel').textContent = t.minSilenceLenLabel;
+            document.getElementById('silenceThreshLabel').textContent = t.silenceThreshLabel;
+            document.getElementById('minChunkLengthLabel').textContent = t.minChunkLengthLabel;
+            document.getElementById('maxChunkLengthLabel').textContent = t.maxChunkLengthLabel;
+            document.getElementById('audioFileLabel').textContent = t.audioFileLabel;
+            document.getElementById('processButton').textContent = t.processButton;
+            if (statusDiv.textContent.includes("状态消息将显示在此处...") || statusDiv.textContent.includes("Status messages will appear here...")) {
+                 statusDiv.textContent = t.statusPlaceholder;
+            }
+            langToggleBtn.textContent = lang === 'zh' ? t.switchToEnglish : t.switchToChinese;
+        }
+
+        langToggleBtn.addEventListener('click', () => {
+            currentLang = currentLang === 'zh' ? 'en' : 'zh';
+            localStorage.setItem('transcriptionToolLang', currentLang);
+            applyTranslations(currentLang);
+        });
+        // --- End Localization ---
+
+
+        // Load API key from localStorage if available
+        apiKeyInput.value = localStorage.getItem('siliconFlowApiKey') || '';
+        if (apiKeyInput.value) { // Log only if a key was actually loaded
+             logStatus(translations[currentLang].apiKeySaved, true);
+        }
+
+
+        apiKeyInput.addEventListener('change', () => {
+            localStorage.setItem('siliconFlowApiKey', apiKeyInput.value);
+            logStatus(translations[currentLang].apiKeySaved);
+        });
+
+        processButton.addEventListener('click', async () => {
+            const apiKey = apiKeyInput.value.trim();
+            const modelName = modelNameInput.value.trim();
+            const audioFile = audioFileInput.files[0];
+            const t = translations[currentLang]; // Get current language translations
+
+            const vadParams = {
+                minSilenceLen: parseInt(minSilenceLenInput.value),
+                silenceThresh: parseFloat(silenceThreshInput.value),
+                minChunkLength: parseInt(minChunkLengthInput.value),
+                maxChunkLength: parseInt(maxChunkLengthInput.value)
+            };
+
+            if (!apiKey) {
+                logStatus(t.errorApiKeyMissing);
+                alert(t.alertApiKeyMissing);
+                return;
+            }
+            if (!audioFile) {
+                logStatus(t.errorNoAudioFile);
+                alert(t.alertNoAudioFile);
+                return;
+            }
+            if (!modelName) {
+                logStatus(t.errorModelNameMissing);
+                alert(t.alertModelNameMissing);
+                return;
+            }
+
+            processButton.disabled = true;
+            logStatus(t.processingStarted);
+
+            try {
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const arrayBuffer = await audioFile.arrayBuffer();
+                logStatus("Audio file read into buffer. Decoding...");
+                const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+                logStatus(t.audioDecoded);
+                const speechChunks = await simpleVAD(audioBuffer, audioContext.sampleRate, vadParams);
+
+                if (speechChunks.length === 0) {
+                    logStatus(t.noSpeechDetected);
+                    processButton.disabled = false;
+                    return;
+                }
+                logStatus(t.vadFoundSegments(speechChunks.length));
+
+                const transcriptionPromises = speechChunks.map(async (chunk, index) => {
+                    logStatus(t.processingChunk(index + 1, speechChunks.length));
+                    const chunkAudioBuffer = sliceAudioBuffer(audioBuffer, chunk.start, chunk.end, audioContext);
+                    const wavBlob = audioBufferToWavBlob(chunkAudioBuffer);
+
+                    const formData = new FormData();
+                    formData.append('file', wavBlob, `chunk_${index}.wav`);
+                    formData.append('model', modelName);
+
+                    let retries = 3;
+                    while(retries > 0) {
+                        try {
+                            const response = await fetch(SILICONFLOW_API_URL, {
+                                method: 'POST',
+                                headers: {
+                                    'Authorization': `Bearer ${apiKey}`
+                                },
+                                body: formData
+                            });
+
+                            if (!response.ok) {
+                                const errorData = await response.json().catch(() => ({ error: { message: response.statusText } }));
+                                throw new Error(`API Error (${response.status}): ${errorData.error?.message || 'Unknown error'}`);
+                            }
+                            const result = await response.json();
+                            logStatus(t.chunkTranscribed(index + 1, result.text));
+                            return {
+                                text: result.text,
+                                startTime: chunk.start * 1000, // ms
+                                endTime: chunk.end * 1000    // ms
+                            };
+                        } catch (error) {
+                            retries--;
+                            logStatus(t.errorTranscribingChunk(index + 1, error.message, retries));
+                            if (retries === 0) {
+                                // Instead of rethrowing and stopping all, return null or an error object
+                                // This allows Promise.all to complete and other chunks to be processed.
+                                return { text: `[ERROR: Chunk ${index+1} failed]`, startTime: chunk.start * 1000, endTime: chunk.end * 1000, error: true };
+                            }
+                            await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2s before retry
+                        }
+                    }
+                });
+
+                const transcriptionResults = await Promise.all(transcriptionPromises);
+                logStatus(t.allChunksTranscribed);
+
+                const srtContent = generateSRT(transcriptionResults.filter(r => r && !r.error)); // Filter out failed chunks for SRT
+                downloadSRT(srtContent, audioFile.name, t.downloadSRTFileName);
+                logStatus(t.srtGenerated);
+
+            } catch (error) {
+                logStatus(`Error: ${error.message}\n${error.stack}`);
+                console.error("Processing error:", error);
+            } finally {
+                processButton.disabled = false;
+            }
+        });
+
+        function logStatus(message, isInitial = false) {
+            console.log(message);
+            const t = translations[currentLang];
+            if (isInitial && (statusDiv.textContent === t.statusPlaceholder || statusDiv.textContent === "")) {
+                statusDiv.textContent = `${new Date().toLocaleTimeString()}: ${message}`;
+            } else if (statusDiv.textContent === t.statusPlaceholder) {
+                 statusDiv.textContent = `${new Date().toLocaleTimeString()}: ${message}`;
+            }
+            else {
+                statusDiv.textContent = `${new Date().toLocaleTimeString()}: ${message}\n` + statusDiv.textContent;
+            }
+        }
+
+
+        function msToSrtTimestamp(ms) {
+            const hours = Math.floor(ms / 3600000);
+            ms %= 3600000;
+            const minutes = Math.floor(ms / 60000);
+            ms %= 60000;
+            const seconds = Math.floor(ms / 1000);
+            ms %= 1000;
+            return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
+        }
+
+        function generateSRT(transcriptions) {
+            let srt = "";
+            transcriptions.forEach((item, index) => {
+                // Check if item is valid and has text.
+                // The check for item.error is already done before calling this function.
+                if (item && typeof item.text === 'string') {
+                    srt += `${index + 1}\n`;
+                    srt += `${msToSrtTimestamp(item.startTime)} --> ${msToSrtTimestamp(item.endTime)}\n`;
+                    srt += `${item.text.trim()}\n\n`;
+                }
+            });
+            return srt;
+        }
+
+        function downloadSRT(srtContent, originalFileName, defaultName = "output") {
+            const blob = new Blob([srtContent], { type: 'text/srt;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const baseName = originalFileName.substr(0, originalFileName.lastIndexOf('.')) || defaultName;
+            a.download = `${baseName}.srt`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        async function simpleVAD(audioBuffer, sampleRate, params) {
+            const { minSilenceLen, silenceThresh, minChunkLength, maxChunkLength } = params;
+            const channelData = audioBuffer.getChannelData(0);
+            const frameDurationSec = 0.02; // 20ms frames
+            const frameSize = Math.floor(sampleRate * frameDurationSec);
+            const minSilenceFrames = Math.floor(minSilenceLen / (frameDurationSec * 1000));
+            const minSpeechFrames = Math.floor(minChunkLength / (frameDurationSec * 1000));
+            const maxSpeechFrames = Math.floor(maxChunkLength / (frameDurationSec * 1000));
+
+            let speechSegments = [];
+            let currentSegmentStartFrame = -1;
+            let silenceCounter = 0;
+
+            for (let frameIndex = 0; (frameIndex * frameSize) < channelData.length; frameIndex++) {
+                const frameStartSample = frameIndex * frameSize;
+                let sumSquare = 0;
+                let actualFrameSamples = 0;
+                for (let j = 0; j < frameSize && (frameStartSample + j) < channelData.length; j++) {
+                    sumSquare += channelData[frameStartSample + j] * channelData[frameStartSample + j];
+                    actualFrameSamples++;
+                }
+                if (actualFrameSamples === 0) continue;
+                const rms = Math.sqrt(sumSquare / actualFrameSamples);
+                const isSpeech = rms > silenceThresh;
+
+                if (isSpeech) {
+                    silenceCounter = 0;
+                    if (currentSegmentStartFrame === -1) {
+                        currentSegmentStartFrame = frameIndex;
+                    }
+                } else { // Silence
+                    if (currentSegmentStartFrame !== -1) {
+                        silenceCounter++;
+                        if (silenceCounter >= minSilenceFrames) {
+                            const segmentEndFrame = frameIndex - silenceCounter;
+                            if ((segmentEndFrame - currentSegmentStartFrame + 1) >= minSpeechFrames) {
+                                addSegment(speechSegments, currentSegmentStartFrame, segmentEndFrame, frameDurationSec, maxSpeechFrames, minSpeechFrames);
+                            }
+                            currentSegmentStartFrame = -1;
+                            silenceCounter = 0;
+                        }
+                    }
+                }
+
+                if (currentSegmentStartFrame !== -1 && (frameIndex - currentSegmentStartFrame + 1) >= maxSpeechFrames) {
+                    addSegment(speechSegments, currentSegmentStartFrame, frameIndex, frameDurationSec, maxSpeechFrames, minSpeechFrames);
+                    currentSegmentStartFrame = frameIndex + 1; // Start new segment immediately after
+                    silenceCounter = 0;
+                }
+            }
+
+            if (currentSegmentStartFrame !== -1) { // Handle segment at the end of audio
+                const lastFrame = Math.floor(channelData.length / frameSize) -1;
+                 if ((lastFrame - currentSegmentStartFrame + 1) >= minSpeechFrames) {
+                    addSegment(speechSegments, currentSegmentStartFrame, lastFrame, frameDurationSec, maxSpeechFrames, minSpeechFrames);
+                }
+            }
+            
+            return speechSegments;
+        }
+
+        function addSegment(segmentsArray, startFrame, endFrame, frameDurationSec, maxSpeechFramesPerChunk, minSpeechFramesPerChunk) {
+            let currentChunkStartFrame = startFrame;
+            while (currentChunkStartFrame <= endFrame) {
+                let currentChunkEndFrame = Math.min(currentChunkStartFrame + maxSpeechFramesPerChunk - 1, endFrame);
+                if ((currentChunkEndFrame - currentChunkStartFrame + 1) >= minSpeechFramesPerChunk) {
+                     segmentsArray.push({
+                        start: currentChunkStartFrame * frameDurationSec,
+                        end: (currentChunkEndFrame + 1) * frameDurationSec // End is exclusive for slicing, so +1 frame
+                    });
+                }
+                currentChunkStartFrame = currentChunkEndFrame + 1;
+            }
+        }
+
+        function sliceAudioBuffer(audioBuffer, startSeconds, endSeconds, audioContext) {
+            const sampleRate = audioBuffer.sampleRate;
+            const startOffset = Math.floor(startSeconds * sampleRate);
+            let endOffset = Math.floor(endSeconds * sampleRate);
+
+            // Ensure endOffset does not exceed buffer length
+            if (endOffset > audioBuffer.length) {
+                endOffset = audioBuffer.length;
+            }
+
+            let frameCount = endOffset - startOffset;
+
+            if (frameCount <= 0) {
+                 console.warn(`Attempting to slice an empty or invalid range: ${startSeconds.toFixed(3)}s to ${endSeconds.toFixed(3)}s. StartOffset: ${startOffset}, EndOffset: ${endOffset}, FrameCount: ${frameCount}`);
+                 const emptyBuffer = audioContext.createBuffer(audioBuffer.numberOfChannels, Math.max(1, frameCount), sampleRate); // Ensure at least 1 sample
+                 return emptyBuffer;
+            }
+
+            const newBuffer = audioContext.createBuffer(
+                audioBuffer.numberOfChannels,
+                frameCount,
+                sampleRate
+            );
+
+            for (let i = 0; i < audioBuffer.numberOfChannels; i++) {
+                const channelData = audioBuffer.getChannelData(i);
+                const newChannelData = newBuffer.getChannelData(i);
+                // Ensure subarray arguments are within bounds
+                const subArrayStart = Math.max(0, startOffset);
+                const subArrayEnd = Math.min(channelData.length, endOffset);
+                if (subArrayStart < subArrayEnd) {
+                    newChannelData.set(channelData.subarray(subArrayStart, subArrayEnd));
+                } else {
+                    console.warn(`Subarray for slicing is invalid: start ${subArrayStart}, end ${subArrayEnd}`);
+                }
+            }
+            return newBuffer;
+        }
+
+        function audioBufferToWavBlob(buffer) {
+            let numOfChan = buffer.numberOfChannels,
+                btwLength = buffer.length * numOfChan * 2 + 44,
+                btwArrBuff = new ArrayBuffer(btwLength),
+                btwView = new DataView(btwArrBuff),
+                btwChnls = [],
+                btwIndex,
+                btwSample,
+                btwOffset = 0,
+                btwPos = 0;
+            setUint32(0x46464952); // "RIFF"
+            setUint32(btwLength - 8); // file length - 8
+            setUint32(0x45564157); // "WAVE"
+            setUint32(0x20746d66); // "fmt " chunk
+            setUint32(16); // length = 16
+            setUint16(1); // PCM (uncompressed)
+            setUint16(numOfChan);
+            setUint32(buffer.sampleRate);
+            setUint32(buffer.sampleRate * 2 * numOfChan); // avg. bytes/sec
+            setUint16(numOfChan * 2); // block-align
+            setUint16(16); // 16-bit
+            setUint32(0x61746164); // "data" - chunk
+            setUint32(buffer.length * numOfChan * 2); // chunk length (data size)
+
+            for (btwIndex = 0; btwIndex < buffer.numberOfChannels; btwIndex++)
+                btwChnls.push(buffer.getChannelData(btwIndex));
+
+            // Re-calculate btwPos before data writing loop to ensure it's correct
+            // The header is 44 bytes long. btwPos should be 44.
+            // Let's trace:
+            // RIFF (4) + length (4) + WAVE (4) = 12
+            // fmt_ (4) + 16 (4) + PCM (2) + numOfChan (2) + sampleRate (4) + avgBytes (4) + blockAlign (2) + 16bit (2) = 28
+            // data (4) + chunkSize (4) = 8
+            // Total = 12 + 28 + 8 = 48. Oh, the previous calculation of btwPos was implicit.
+            // Let's set it explicitly after header.
+            // The setUint32 for data chunk length is the last part of the header.
+            // So btwPos should be at 44 after writing the header.
+
+            // The loop for writing samples
+            for (btwOffset = 0; btwOffset < buffer.length; btwOffset++) { // Iterate over samples
+                for (btwIndex = 0; btwIndex < numOfChan; btwIndex++) { // Iterate over channels
+                    btwSample = Math.max(-1, Math.min(1, btwChnls[btwIndex][btwOffset]));
+                    btwSample = (btwSample < 0 ? btwSample * 32768 : btwSample * 32767); // scale to 16-bit signed int
+                    btwView.setInt16(btwPos, btwSample, true);
+                    btwPos += 2;
+                }
+            }
+            return new Blob([btwArrBuff], { type: "audio/wav" });
+
+            function setUint16(data) {
+                btwView.setUint16(btwPos, data, true);
+                btwPos += 2;
+            }
+            function setUint32(data) {
+                btwView.setUint32(btwPos, data, true);
+                btwPos += 4;
+            }
+        }
+
+        // Apply initial translation
+        applyTranslations(currentLang);
+        // Set initial status placeholder text based on language
+        statusDiv.textContent = translations[currentLang].statusPlaceholder;
+
+    </script>
+</body>
+</html>
