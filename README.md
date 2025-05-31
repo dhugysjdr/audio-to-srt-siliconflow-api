@@ -9,6 +9,8 @@
 https://cloud.siliconflow.cn/account/ak
 你可以从这里得到硅基流动的key，这个接口目前是免费的，不会消耗key的额度。
 
+灵感来源https://linux.do/t/topic/691182/4
+
 **安全警告：在浏览器 (localStorage) 中存储 API 密钥是不安全的，仅适用于您是唯一用户的个人本地工具。请勿在可公开访问的 Web 应用程序中使用此方法。**
 
 ## 功能特性
